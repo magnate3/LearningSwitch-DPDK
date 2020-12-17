@@ -31,23 +31,31 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <stdio.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <signal.h>
-#include <pthread.h>
+#include <arpa/inet.h>
 #include <getopt.h>
-#include <string.h>
+#include <linux/if_ether.h>
+#include <linux/if_vlan.h>
+#include <linux/virtio_net.h>
+#include <linux/virtio_ring.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/eventfd.h>
+#include <sys/param.h>
+#include <unistd.h>
 
-#include <rte_eal.h>
-#include <rte_mbuf.h>
-#include <rte_virtio_net.h>
-#include <rte_malloc.h>
-#include <rte_log.h>
+#include <rte_atomic.h>
+#include <rte_cycles.h>
 #include <rte_ethdev.h>
+#include <rte_log.h>
+#include <rte_string_fns.h>
+#include <rte_malloc.h>
+#include <rte_vhost.h>
+#include <rte_ip.h>
+#include <rte_tcp.h>
+#include <rte_pause.h>
 #include <rte_hash.h>
-
 #include "main.h"
+
 
 #define NUM_MBUFS 8192
 #define MBUF_CACHE_SIZE 128
@@ -99,7 +107,7 @@ parse_socket_paths(int argc, char **argv) {
 		{ NULL, 0, 0, 0},
 	};
 
-	while((opt = getopt_long(argc, argv, "hs:", long_option, NULL)) != -1) {
+	while((opt = getopt_long(argc, argv, "hs:", long_option, NULL)) != EOF) {
 		switch (opt) {
 		case 'h':
 			print_usage();
@@ -119,14 +127,14 @@ parse_socket_paths(int argc, char **argv) {
 			Nb_sockets++;
 			break;
 		default:
-			RTE_LOG(INFO, LSWITCH_CONFIG, "Invalid arguments\n");
+			RTE_LOG(INFO, LSWITCH_CONFIG, "Invalid arguments \n");
 			print_usage();
 			return -1;
 		}
 	}
 	return 0;
-}
 
+}
 
 /*
  * This function initializes a physical port.
@@ -135,7 +143,7 @@ static int
 port_init(int portid)
 {
 	const struct rte_eth_conf port_conf = {
-		.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
+		.rxmode = { .max_rx_pkt_len = RTE_ETHER_MAX_LEN }
 	};
 	const uint16_t rx_rings = 1;
 	const uint16_t tx_rings = 1;
@@ -167,7 +175,7 @@ port_init(int portid)
 		return ret;
 
 	/* Display the port MAC address */
-	struct ether_addr addr;
+	struct rte_ether_addr addr;
 	rte_eth_macaddr_get(portid, &addr);
 	RTE_LOG(INFO, LSWITCH_CONFIG, "Port %u MAC: "
 		"%02" PRIx8 "%02" PRIx8 "%02" PRIx8
@@ -235,7 +243,7 @@ static void
 destroy_vdev_callback(int vid)
 {
 	struct dev_info *dev = NULL;
-	struct ether_addr *key;
+	struct rte_ether_addr *key;
 	int ret;
 
 	TAILQ_FOREACH(dev, &Dev_list, dev_entry) {
@@ -312,7 +320,7 @@ mac_to_uchar(const void *data, uint32_t data_len, uint32_t init_val)
 static int
 learn_mac_address(struct rte_mbuf *mbuf, struct dev_info *s_dev)
 {
-	struct ether_hdr *pkt_hdr;
+	struct rte_ether_hdr *pkt_hdr;
 	int ret;
 
 	pkt_hdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr *);
@@ -350,13 +358,13 @@ learn_mac_address(struct rte_mbuf *mbuf, struct dev_info *s_dev)
 static void
 forward_packet(struct rte_mbuf *mbuf, struct dev_info *s_dev)
 {
-	struct ether_hdr *pkt_hdr;
+	struct rte_ether_hdr *pkt_hdr;
 	struct dev_info *dev;
 	struct rte_mbuf *tbuf;
 	int ret;
 
 	/* Get the Ethernet header and find destination output */
-	pkt_hdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr *);
+	pkt_hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	ret = rte_hash_lookup(Mac_output_map, &pkt_hdr->d_addr);
 
 	/* Broadcast */
@@ -479,7 +487,7 @@ int main(int argc, char **argv)
 	ret = parse_socket_paths(argc, argv);
 	if(ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid switch arguments\n");
-
+         printf("init vhost \n");
 	/* Register SIGINT for termination and cleaning up */
 	signal(SIGINT, force_exit_handling);
 
@@ -495,7 +503,7 @@ int main(int argc, char **argv)
 	const struct rte_hash_parameters mac_output_map_params = {
 		.name = NULL,
 		.entries = NUM_HASH_ENTRIES,
-		.key_len = sizeof(struct ether_addr),
+		.key_len = sizeof(struct rte_ether_addr),
 		.hash_func = mac_to_uchar,
 		.hash_func_init_val = 0,
 	};
@@ -509,7 +517,13 @@ int main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Mutex fuilure\n");
 	}
 
+		if(port_init(1) != 0) {
+			rte_exit(EXIT_FAILURE,
+				 "Physical port %d initialization failure\n",
+				 1);
+		}
 	/* Initialize physical ports */
+        /*
 	for(int portid = 0; portid < Nb_ports; portid++) {
 		if(port_init(portid) != 0) {
 			rte_exit(EXIT_FAILURE,
@@ -517,7 +531,7 @@ int main(int argc, char **argv)
 				 portid);
 		}
 	}
-
+        */
 
 	/* Set permission of socket files to 0666 */
 	sock_perm = umask(~0666);
@@ -537,11 +551,11 @@ int main(int argc, char **argv)
 	rte_eal_remote_launch(learning_switch_main, NULL, 1);
 
 	/* Register callback for adding and removing virtual devices */
-	const struct virtio_net_device_ops virtio_net_device_ops = {
+	const struct vhost_device_ops virtio_net_device_ops = {
 		.new_device =  new_vdev_callback,
 		.destroy_device = destroy_vdev_callback,
 	};
-	rte_vhost_driver_callback_register(&virtio_net_device_ops);
+	rte_vhost_driver_callback_register(Socket_files,&virtio_net_device_ops);
 
 	rte_vhost_driver_session_start();
 	return 0;

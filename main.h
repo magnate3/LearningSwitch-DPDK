@@ -14,7 +14,7 @@ enum device_state {
 	DEVICE_READY = 0,
 	DEVICE_CLOSING = 1,
 };
-
+enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
 
 /* Device information */
 struct dev_info {
