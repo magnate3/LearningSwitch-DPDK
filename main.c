@@ -99,21 +99,28 @@ print_usage(void)
  */
 static int
 parse_socket_paths(int argc, char **argv) {
+/*
 	char opt;
-
+        int options_index=0;
+        
 	static struct option long_option[] = {
 		{ "help", no_argument, NULL, 'h'},
 		{ "socket-file", required_argument, NULL, 's'},
-		{ NULL, 0, 0, 0},
+		{ NULL, no_argument, NULL, 0},
 	};
-
-	while((opt = getopt_long(argc, argv, "hs:", long_option, NULL)) != EOF) {
+        for (int i =0;  i < argc ; ++i) 
+       {
+             printf("argv[%d]:  %s \n", i ,argv[i]);
+       }
+	while((opt = getopt_long(argc, argv, "h:", long_option, &options_index)) != EOF) {
+                printf("opt :%c and arg : %s \n ", opt , optarg);
 		switch (opt) {
 		case 'h':
 			print_usage();
 			exit(0);
 			break;
 		case 's':
+ if (!strncmp(long_option[options_index].name, "socket-file",PATH_MAX)) {
 			if(strlen(optarg) > PATH_MAX) {
 				RTE_LOG(INFO, LSWITCH_CONFIG,
 					"Invalid path length for socket name "
@@ -125,13 +132,21 @@ parse_socket_paths(int argc, char **argv) {
 			snprintf(Socket_files + Nb_sockets * PATH_MAX, PATH_MAX,
 				 "%s", optarg);
 			Nb_sockets++;
-			break;
+}
+                        break;
 		default:
+
 			RTE_LOG(INFO, LSWITCH_CONFIG, "Invalid arguments \n");
 			print_usage();
 			return -1;
 		}
 	}
+*/
+
+			Socket_files = malloc(PATH_MAX + 1);
+			snprintf(Socket_files, PATH_MAX,
+				 "%s", "/tmp/vhost1");
+			Nb_sockets++;
 	return 0;
 
 }
@@ -323,7 +338,7 @@ learn_mac_address(struct rte_mbuf *mbuf, struct dev_info *s_dev)
 	struct rte_ether_hdr *pkt_hdr;
 	int ret;
 
-	pkt_hdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr *);
+	pkt_hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	ret = rte_hash_add_key(Mac_output_map, &pkt_hdr->s_addr);
 	if(ret < 0) {
 		RTE_LOG(INFO, LSWITCH_CONFIG,
@@ -492,7 +507,7 @@ int main(int argc, char **argv)
 	signal(SIGINT, force_exit_handling);
 
 	/* Create mbuf pool */
-	Nb_ports = rte_eth_dev_count();
+	Nb_ports = rte_eth_dev_count_avail();
 	Mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL",
 					    NUM_MBUFS * (Nb_ports + Nb_sockets),
 					    MBUF_CACHE_SIZE, 0,
@@ -501,7 +516,7 @@ int main(int argc, char **argv)
 
 	/* Create MAC-address-to-output hash table */
 	const struct rte_hash_parameters mac_output_map_params = {
-		.name = NULL,
+		.name = "mac_addr",
 		.entries = NUM_HASH_ENTRIES,
 		.key_len = sizeof(struct rte_ether_addr),
 		.hash_func = mac_to_uchar,
@@ -517,11 +532,11 @@ int main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Mutex fuilure\n");
 	}
 
-		if(port_init(1) != 0) {
+	if(port_init(1) != 0) {
 			rte_exit(EXIT_FAILURE,
 				 "Physical port %d initialization failure\n",
 				 1);
-		}
+	}
 	/* Initialize physical ports */
         /*
 	for(int portid = 0; portid < Nb_ports; portid++) {
@@ -557,6 +572,7 @@ int main(int argc, char **argv)
 	};
 	rte_vhost_driver_callback_register(Socket_files,&virtio_net_device_ops);
 
-	rte_vhost_driver_session_start();
+        rte_vhost_driver_start(Socket_files);
+	//rte_vhost_driver_session_start();
 	return 0;
 }
