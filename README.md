@@ -52,3 +52,7 @@ This project is the first attempt to learn DPDK by myself. I found the following
 [L2 Forwarding](http://dpdk.org/doc/guides/sample_app_ug/l2_forward_real_virtual.html), 
 [Vhost](http://dpdk.org/doc/guides/sample_app_ug/vhost.html)
 * DPDK libraries: [Hash](http://dpdk.org/doc/guides/prog_guide/hash_lib.html), [Vhost](http://dpdk.org/doc/guides/prog_guide/vhost_lib.html)
+
+
+build/app/switch  -c 3 -m 256
+export RTE_SDK=/data1/dpdk-19.11

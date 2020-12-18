@@ -80,6 +80,36 @@ static struct rte_hash *Mac_output_map;
 static struct dev_info *Output_table[NUM_HASH_ENTRIES];
 
 
+static inline void dump_packet(struct rte_mbuf *mbuf)
+{
+        
+        printf("+++++++++++++++++++++++++++++++++++++++\n");
+        int len =rte_pktmbuf_data_len(mbuf);
+        char *buf = (char *)rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+        printf("packet buf=%p len=%d\n", buf, len);
+        int i, j;
+        unsigned char c;
+        for (i = 0; i < len; i++) {
+                printf("%02X", buf[i]);
+                if (i % 16 == 7)
+                        printf("  ");
+                if ((i % 16) == 15 || (i == len - 1)) {
+                        if (i % 16 < 7)
+                                printf("  ");
+                        for (j = 0; j < 15 - (i % 16); j++)
+                                printf("  ");
+                        printf(" | ");
+                        for (j = (i - (i % 16)); j <= i; j++) {
+                                c = buf[j];
+                                if ((c > 31) && (c < 127))
+                                        printf("%c", c);
+                                else
+                                        printf(".");
+                        }
+                        printf("\n");
+                }
+        }
+}
 /*
  * This function displays usage for command line arguments.
  */
@@ -99,6 +129,7 @@ print_usage(void)
  */
 static int
 parse_socket_paths(int argc, char **argv) {
+
 /*
 	char opt;
         int options_index=0;
@@ -143,10 +174,12 @@ parse_socket_paths(int argc, char **argv) {
 	}
 */
 
-			Socket_files = malloc(PATH_MAX + 1);
+			Socket_files = malloc(PATH_MAX);
 			snprintf(Socket_files, PATH_MAX,
 				 "%s", "/tmp/vhost1");
+
 			Nb_sockets++;
+
 	return 0;
 
 }
@@ -241,6 +274,8 @@ new_vdev_callback(int vid)
 	/* Signal the forwarding thread to unlock the device list */
 	Dev_list_update = 1;
 
+        rte_vhost_enable_guest_notification(vid, VIRTIO_RXQ, 0);
+	rte_vhost_enable_guest_notification(vid, VIRTIO_TXQ, 0);
 	pthread_mutex_lock(&Dev_list_mutex);
 	TAILQ_INSERT_TAIL(&Dev_list, dev, dev_entry);
 	Dev_list_update = 0;
@@ -385,16 +420,22 @@ forward_packet(struct rte_mbuf *mbuf, struct dev_info *s_dev)
 	/* Broadcast */
 	if(ret < 0) {
 		TAILQ_FOREACH(dev, &Dev_list, dev_entry) {
+                        printf(" forward_packet \n " );
 			if(dev == s_dev)
 				continue;
 
 			if(dev->virtual) {
+                                printf(" forward_packet virtual dev forward \n ");
 				if(unlikely(dev->state == DEVICE_CLOSING))
+                                {
+                                        printf(" forward_packet virtual dev closing \n ");
 					continue;
+                                }
 				rte_vhost_enqueue_burst(dev->id, VIRTIO_RXQ,
 							&mbuf, 1);
 			}
 			else {
+                                printf(" forward_packet phy dev forward \n ");
 				tbuf = rte_pktmbuf_clone(mbuf, Mbuf_pool);
 				ret = rte_eth_tx_burst(dev->id, 0, &tbuf, 1);
 				if(unlikely(ret == 0))
@@ -408,11 +449,13 @@ forward_packet(struct rte_mbuf *mbuf, struct dev_info *s_dev)
 	/* Unicast */
 	dev = Output_table[ret];
 	if(dev->virtual) {
+                                dump_packet(mbuf);
 		if(unlikely(dev->state != DEVICE_CLOSING))
 			rte_vhost_enqueue_burst(dev->id, VIRTIO_RXQ, &mbuf, 1);
 		rte_pktmbuf_free(mbuf);
 	}
 	else {
+                                dump_packet(mbuf);
 		ret = rte_eth_tx_burst(dev->id, 0, &mbuf, 1);
 		if(unlikely(ret == 0))
 			rte_pktmbuf_free(mbuf);
@@ -455,13 +498,19 @@ static int learning_switch_main(void *arg __rte_unused)
 					continue;
 
 				if(dev->virtual)
+                                {
+                                        //printf("rte_vhost_dequeue_burst \n");
 					nb_rcv = rte_vhost_dequeue_burst(dev->id,
 									 VIRTIO_TXQ,
 									 Mbuf_pool, mbufs,
 									 MAX_PKT_BURST);
+                                }
 				else
+                                {
+                                        //printf("rte_eth_rx_burst\n");
 					nb_rcv = rte_eth_rx_burst(dev->id, 0, mbufs,
 								  MAX_PKT_BURST);
+                                }
 
 				for(int n = 0; n < nb_rcv; n++) {
 					learn_mac_address(mbufs[n], dev);
@@ -488,6 +537,7 @@ static void force_exit_handling(__rte_unused int signum)
 
 int main(int argc, char **argv)
 {
+        unsigned lcore_id;
 	int ret;
 	mode_t sock_perm;
 
@@ -553,7 +603,7 @@ int main(int argc, char **argv)
 
 	/* Register vhost drivers */
 	for(int i = 0; i < Nb_sockets; i++) {
-		ret = rte_vhost_driver_register(&Socket_files[i * PATH_MAX], 0);
+		ret = rte_vhost_driver_register(&Socket_files[i * PATH_MAX], RTE_VHOST_USER_CLIENT);
 		if(ret != 0) {
 			rte_exit(EXIT_FAILURE, "Vhost register failure\n");
 		}
@@ -574,5 +624,7 @@ int main(int argc, char **argv)
 
         rte_vhost_driver_start(Socket_files);
 	//rte_vhost_driver_session_start();
+        RTE_LCORE_FOREACH_SLAVE(lcore_id)
+                rte_eal_wait_lcore(lcore_id);
 	return 0;
 }
